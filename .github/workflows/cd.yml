@@ -1,4 +1,4 @@
-name: CD For SiYuan
+name: CD For SiYuan (Windows EXE Only)
 
 on:
   push:
@@ -6,14 +6,12 @@ on:
       - '*-dev*'
   workflow_dispatch:
 
-# ref https://docs.github.com/zh/actions/learn-github-actions/variables
 env:
   repo_name_android: "siyuan-android"
   repo_name: "siyuan"
   repo_owner: "siyuan-note"
   package_json: "app/package.json"
 
-# 补充权限配置：允许创建Tag/Release、推送代码
 permissions:
   contents: write
   packages: write
@@ -27,13 +25,13 @@ jobs:
       release_version: ${{ steps.release_info.outputs.release_version }}
       version: ${{ steps.version.outputs.value }}
       packageManager: ${{ steps.packageManager.outputs.value }}
-      tag_name: ${{ steps.create_valid_tag.outputs.tag_name }} # 新增：输出合法Tag名
+      tag_name: ${{ steps.create_valid_tag.outputs.tag_name }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0 # 拉取完整历史，支持Tag操作
-          persist-credentials: true # 保留凭证，允许推送Tag
+          fetch-depth: 0
+          persist-credentials: true
 
       - name: Configure Git User
         run: |
@@ -86,20 +84,15 @@ jobs:
         env:
             GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      # 新增：生成合法Tag名（移除refs/前缀，避免422错误）
       - name: Create Valid Git Tag
         id: create_valid_tag
         run: |
-          # 处理两种触发场景：tag推送/手动触发
           if [[ "${{ github.event_name }}" == "push" && "${{ github.ref_type }}" == "tag" ]]; then
-            # 推送Tag触发：直接使用Tag名（已合法）
             TAG_NAME=${{ github.ref_name }}
           else
-            # 手动触发：使用release_version作为Tag名
             TAG_NAME=${{ steps.release_info.outputs.release_version }}
           fi
 
-          # 检查Tag是否已存在，不存在则创建并推送
           if ! git rev-parse "$TAG_NAME" >/dev/null 2>&1; then
             git tag "$TAG_NAME"
             git push origin "$TAG_NAME"
@@ -111,81 +104,29 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      # 修复：使用合法Tag名创建Release，替换原github.ref
       - name: Create Release
         id: create_release
         uses: ncipollo/release-action@v1
         with:
           name: ${{ steps.release_info.outputs.release_version }}
-          tag: ${{ steps.create_valid_tag.outputs.tag_name }} # 使用合法Tag
+          tag: ${{ steps.create_valid_tag.outputs.tag_name }}
           body: ${{ env.release_body }}
           draft: false
           prerelease: true
           token: ${{ secrets.GITHUB_TOKEN }}
 
-  build:
-    runs-on: ${{ matrix.config.os }}
-    name: ${{ matrix.config.name }}
+  build_windows_exe:
+    runs-on: windows-latest
+    name: Windows build win.exe
     needs: create_release
-    strategy:
-      matrix:
-        config:
-          - os: ubuntu-22.04
-            name: ubuntu build linux.AppImage
-            kernel_path: "../app/kernel-linux/SiYuan-Kernel"
-            build_args_prefix: "-s -w -X"
-            build_args_suffix: "Mode=prod"
-            electron_args: "dist-linux"
-            goos: "linux"
-            goarch: "amd64"
-            suffix: "linux.AppImage"
-          - os: ubuntu-22.04
-            name: ubuntu build linux.tar.gz
-            kernel_path: "../app/kernel-linux/SiYuan-Kernel"
-            build_args_prefix: "-s -w -X"
-            build_args_suffix: "Mode=prod"
-            electron_args: "dist-linux"
-            goos: "linux"
-            goarch: "amd64"
-            suffix: "linux.tar.gz"
-          - os: macos-latest
-            name: macos build mac.dmg
-            kernel_path: "../app/kernel-darwin/SiYuan-Kernel"
-            build_args_prefix: "-s -w -X"
-            build_args_suffix: "Mode=prod"
-            electron_args: "dist-darwin"
-            goos: "darwin"
-            goarch: "amd64"
-            suffix: "mac.dmg"
-          - os: macos-latest
-            name: macos build mac-arm64.dmg
-            kernel_path: "../app/kernel-darwin-arm64/SiYuan-Kernel"
-            build_args_prefix: "-s -w -X"
-            build_args_suffix: "Mode=prod"
-            electron_args: "dist-darwin-arm64"
-            goos: "darwin"
-            goarch: "arm64"
-            suffix: "mac-arm64.dmg"
-          - os: windows-latest
-            name: windows build win.exe
-            kernel_path: "../app/kernel/SiYuan-Kernel.exe"
-            build_args_prefix: "-s -w -H=windowsgui -X"
-            build_args_suffix: "Mode=prod"
-            electron_args: "dist"
-            goos: "windows"
-            gobin: "bin"
-            mingwsys: "MINGW64"
-            goarch: "amd64"
-            suffix: "win.exe"
-
     steps:
     - uses: actions/checkout@v4
       with:
         path: ${{ github.workspace }}/go/src/github.com/${{ env.repo_owner }}/${{ env.repo_name }}
 
+    # 仅保留Windows必需的MingGW配置
     - name: Set up MingGW
       uses: msys2/setup-msys2@v2
-      if: "contains( matrix.config.goos, 'windows')"
       with:
         install: p7zip mingw-w64-x86_64-lua
 
@@ -195,16 +136,16 @@ jobs:
         go-version-file: ${{ github.workspace }}/go/src/github.com/${{ env.repo_owner }}/${{ env.repo_name }}/kernel/go.mod
     - run: go version
 
+    # Windows专属：goversioninfo（生成exe版本信息/图标）
     - name: Set up goversioninfo
       run: go get github.com/josephspurrier/goversioninfo/cmd/goversioninfo && go install github.com/josephspurrier/goversioninfo/cmd/goversioninfo
-      if: "contains( matrix.config.goos, 'windows')"
       working-directory: ${{ github.workspace }}/go/src/github.com/${{ env.repo_owner }}/${{ env.repo_name }}/kernel
       env:
         GO111MODULE: on
         CGO_ENABLED: 1
-        GOOS: ${{ matrix.config.goos }}
+        GOOS: windows
         GOPATH: ${{ github.workspace }}/go
-        GOARCH: ${{ matrix.config.goarch }}
+        GOARCH: amd64
 
     - name: Set up Node
       uses: actions/setup-node@v4
@@ -223,56 +164,45 @@ jobs:
       run: pnpm run build
       working-directory: ${{ github.workspace }}/go/src/github.com/${{ env.repo_owner }}/${{ env.repo_name }}/app
 
+    # 仅清理Windows相关的kernel目录
     - name: Remove Build Directory
       uses: JesseTG/rm@v1.0.2
       with:
         path: ${{ github.workspace }}/go/src/github.com/${{ env.repo_owner }}/${{ env.repo_name }}/app/build
-
-    - name: Remove Kernel Directory for Linux
-      uses: JesseTG/rm@v1.0.2
-      with:
-        path: ${{ github.workspace }}/go/src/github.com/${{ env.repo_owner }}/${{ env.repo_name }}/app/kernel-linux
 
     - name: Remove Kernel Directory for Windows
       uses: JesseTG/rm@v1.0.2
       with:
         path: ${{ github.workspace }}/go/src/github.com/${{ env.repo_owner }}/${{ env.repo_name }}/app/kernel
 
-    - name: Remove Kernel Directory for macOS
-      uses: JesseTG/rm@v1.0.2
-      with:
-        path: ${{ github.workspace }}/go/src/github.com/${{ env.repo_owner }}/${{ env.repo_name }}/app/kernel-darwin
-
-    - name: Remove Kernel Directory for macOS ARM64
-      uses: JesseTG/rm@v1.0.2
-      with:
-        path: ${{ github.workspace }}/go/src/github.com/${{ env.repo_owner }}/${{ env.repo_name }}/app/kernel-darwin-arm64
-
+    # Windows专属：生成exe图标/版本信息
     - name: Generate Icon Resource and Properties/Version Info For Windows
-      run: ${{ github.workspace }}\go\${{ matrix.config.gobin }}\goversioninfo -platform-specific=true -icon="resource\icon.ico" -manifest="resource\goversioninfo.exe.manifest"
-      if: "contains( matrix.config.goos, 'windows')"
+      run: ${{ github.workspace }}\go\bin\goversioninfo -platform-specific=true -icon="resource\icon.ico" -manifest="resource\goversioninfo.exe.manifest"
       working-directory: ${{ github.workspace }}/go/src/github.com/${{ env.repo_owner }}/${{ env.repo_name }}/kernel
     
+    # 编译Windows内核（exe）
     - name: Building Kernel
-      run: go build --tags fts5 -o "${{ matrix.config.kernel_path }}" -v -ldflags "${{ matrix.config.build_args_prefix }} github.com/${{ env.repo_owner }}/${{ env.repo_name }}/kernel/util.${{ matrix.config.build_args_suffix }}"
+      run: go build --tags fts5 -o "../app/kernel/SiYuan-Kernel.exe" -v -ldflags "-s -w -H=windowsgui -X github.com/${{ env.repo_owner }}/${{ env.repo_name }}/kernel/util.Mode=prod"
       working-directory: ${{ github.workspace }}/go/src/github.com/${{ env.repo_owner }}/${{ env.repo_name }}/kernel
       env:
         GO111MODULE: on
         CGO_ENABLED: 1
-        GOOS: ${{ matrix.config.goos }}
+        GOOS: windows
         GOPATH: ${{ github.workspace }}/go
-        GOARCH: ${{ matrix.config.goarch }}
+        GOARCH: amd64
       
+    # 打包Electron为Windows exe
     - name: Building Electron App
-      run: pnpm run ${{ matrix.config.electron_args }}
+      run: pnpm run dist
       working-directory: ${{ github.workspace }}/go/src/github.com/${{ env.repo_owner }}/${{ env.repo_name }}/app
 
-    - name: Upload Release
+    # 上传exe到Release
+    - name: Upload Windows EXE to Release
       uses: actions/upload-release-asset@v1
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
         upload_url: ${{ needs.create_release.outputs.upload_url }}
-        asset_name: siyuan-${{ needs.create_release.outputs.release_version }}-${{ matrix.config.suffix }}
-        asset_path: ${{ github.workspace }}/go/src/github.com/${{ env.repo_owner }}/${{ env.repo_name }}/app/build/siyuan-${{ needs.create_release.outputs.version }}-${{ matrix.config.suffix }}
+        asset_name: siyuan-${{ needs.create_release.outputs.release_version }}-win.exe
+        asset_path: ${{ github.workspace }}/go/src/github.com/${{ env.repo_owner }}/${{ env.repo_name }}/app/build/siyuan-${{ needs.create_release.outputs.version }}-win.exe
         asset_content_type: application/octet-stream
